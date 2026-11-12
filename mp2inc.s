@@ -1,3 +1,6 @@
+	opt	d-,p=68030/68882
+	output	.bin
+
 mp2_address	ds.l	1
 mp2_length	ds.l	1
 mp2_frequency	ds.l	1
