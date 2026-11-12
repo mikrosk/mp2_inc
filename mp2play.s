@@ -7,11 +7,16 @@ MP2_START	=	48
 MP2_STOP	=	52
 MP2_ADD_AVAILABLE =	56
 MP2_STREAM_AVAILABLE =	60
+MP2_FEED	=	64
+MP2_INPUT	=	72
 
-; 0: load the whole file into ST-RAM. Otherwise the size of an ST-RAM
-; buffer (a multiple of 8) through which longer files are streamed.
+; 0: load the whole file. Otherwise the size of a buffer (a multiple of
+; 8) through which longer files are streamed.
 MP2_DFD_BUFFER_SIZE =	0
 MP2_LOOP	=	1
+; 1: mp2_feed sends the stream through the host port, 0: the sound DMA
+; reads it from ST-RAM.
+MP2_HOST_PORT	=	1
 
 	text
 
@@ -59,14 +64,14 @@ MP2_LOOP	=	1
 	bls.s	.alloc
 	move.l	#MP2_DFD_BUFFER_SIZE,d6
 	st	streaming
-	st	feeding
+	st	refilling
 	endc
 .alloc	move.l	d6,d0
 	lsr.l	#1,d0
 	move.l	d0,half
-	clr.w	-(sp)
+	move.w	#MP2_HOST_PORT*3,-(sp)	; ST-RAM, or TT-RAM if there is any
 	move.l	d6,-(sp)
-	move.w	#$44,-(sp)		; Mxalloc() in ST-RAM
+	move.w	#$44,-(sp)		; Mxalloc()
 	trap	#1
 	addq.l	#8,sp
 	tst.l	d0
@@ -86,6 +91,7 @@ MP2_LOOP	=	1
 	move.l	d6,MP2_LENGTH(a0)
 	move.l	#44100,MP2_FREQUENCY(a0)
 	move.l	#44100,MP2_EXTERNAL(a0)
+	move.l	#MP2_HOST_PORT,MP2_INPUT(a0)
 	move.l	#MP2_LOOP,MP2_REPEAT(a0)
 	tst.b	streaming
 	beq.s	.start
@@ -95,10 +101,11 @@ MP2_LOOP	=	1
 .loop	move.w	#37,-(sp)		; Vsync()
 	trap	#14
 	addq.l	#2,sp
+	jsr	mp2player+MP2_FEED	; once per VBL
 
-	tst.b	feeding
+	tst.b	refilling
 	beq.s	.key
-	bsr	feed
+	bsr	refill
 .key	cmp.b	#$3b,$fffffc02.w
 	bne.s	.loop
 
@@ -118,11 +125,12 @@ exit	clr.w	-(sp)
 	trap	#1
 
 ;
-; Once less than half of the buffer is left to the decoder, let it read
+; Once less than half of the buffer is left, let the decoder have
 ; another half. When streaming, refill the half it has finished with
-; first; a whole file is still all there as the DMA repeats the buffer.
+; first; a whole file is still all there as the DMA repeats the buffer
+; or mp2_feed wraps around.
 ;
-feed	jsr	mp2player+MP2_STREAM_AVAILABLE
+refill	jsr	mp2player+MP2_STREAM_AVAILABLE
 	move.l	half,d3
 	cmp.l	d3,d0
 	bge.s	.out
@@ -140,7 +148,7 @@ feed	jsr	mp2player+MP2_STREAM_AVAILABLE
 
 ;
 ; Read d3.l bytes of the file to a3; with MP2_LOOP from its start again
-; at its end, otherwise feeding stops there. d0.l = bytes read.
+; at its end, otherwise refilling stops there. d0.l = bytes read.
 ;
 fill	moveq	#0,d4
 	moveq	#0,d5			; rewound
@@ -165,7 +173,7 @@ fill	moveq	#0,d4
 	bsr	rewind
 	bra.s	.read
 	endc
-.stop	sf	feeding
+.stop	sf	refilling
 .out	move.l	d4,d0
 	rts
 
@@ -181,7 +189,7 @@ rewind	clr.w	-(sp)
 
 mp2file	dc.b	'f:\mp2\sound_of.mp2',0
 streaming	dc.b	0
-feeding	dc.b	MP2_LOOP
+refilling	dc.b	MP2_LOOP
 second	dc.b	0
 	even
 

@@ -3,6 +3,12 @@
 ;; COPYRIGHT (c) 1996, 1997 & 1998 by Fredrik Noring
 ;;
 ;; DSP56001 MPEG audio layer 2 decoder.
+;;
+;; Input from the sound DMA or, when the first host word is 1, from the
+;; host port: the 68030 writes the stream three bytes per word (first
+;; byte in bits 23-16) and the host receive interrupt stores the words
+;; in an input ring.  Before it writes, the 68030 issues host command
+;; HC_FREE (vector $24) and reads the number of words it may send.
 
 	include	"equates.asm"
 
@@ -26,6 +32,8 @@ MODE_MONO		equ	3
 
 REPLAY_BUFFER_SIZE	equ	2304
 
+STREAM_SIZE		equ	2048	; input ring (words), a power of two
+
 	org X:$0000	;; Internal RAM (lower half).
 frame_header		ds	1
 frame_size		ds	1
@@ -37,6 +45,7 @@ frame_sblimit		ds	1
 frame_jsbound		ds	1
 
 stream_available 	ds	1
+input_host		ds	1	; 1: input from the host port
 
 getbits_cntlp		ds	1
 getbits_framep	ds	1
@@ -62,6 +71,25 @@ decoder_pcmp		ds	1
 
 decoder_imfct_fractionp	ds	1
 decoder_imfct_delta	ds	1
+
+stream_read		ds	1	; input ring: next word to read
+stream_write		ds	1	; input ring: next word to write
+stream_bytes		ds	1	; bytes left in stream_byte1/2: 2, 1, 0
+stream_byte1		ds	1
+stream_byte2		ds	1
+stream_save_a2	ds	1	; read_ring
+stream_save_a1	ds	1
+stream_save_a0	ds	1
+stream_save_x1	ds	1
+stream_save_r0	ds	1
+stream_save_r6	ds	1
+stream_save_m6	ds	1
+host_save_r6		ds	1	; host_receive
+host_save_m6		ds	1
+host_save_a2		ds	1	; host_free
+host_save_a1		ds	1
+host_save_a0		ds	1
+host_save_x0		ds	1
 
 	org X:$0200	;; External RAM.
 decoder_bitalloc	ds	2*32
@@ -649,6 +677,9 @@ table_multiple	dc	$7fffff,$6597fb,$50a28c,$400000
 table_bits		dc	5,7,3,10,4,5,6,7,8,9
 		dc	10,11,12,13,14,15,16
 
+	org Y:$2800	;; External RAM, aligned for modulo addressing.
+stream_ring		ds	STREAM_SIZE
+
 	org X:$3f00
 getbits_cntl		dc	0,0,0,0,0,0,0,0
 		dc	1,1,1,1,1,1,1,1
@@ -679,10 +710,17 @@ getbits_mask		dc	$000000,$000001,$000003,$000007
 	org P:$12		;; Used instead of P:$10 after an underrun.
 	movep	X:(r7)+,X:<<M_TX
 
+	org P:$20
+	jsr	host_receive
+
+	org P:$24		;; HC_FREE
+	jsr	host_free
+
 ;;
 ;; Some macros.
 ;;
 check_rpc	macro
+	jset	#0,X:<input_host,*+4	; the host port carries the stream
 	jsset	#0,X:<<M_HSR,rpc
 	endm
 
@@ -709,8 +747,14 @@ _fast_forward
 ;;
 	org P:$40
 start	;; Default setup.
+	movep	#0,X:<<M_IPR		; The loader enabled host commands.
+	jsr	Host_get		; Input: 0 = sound DMA, 1 = host port.
+	move	x0,X:<input_host
 	jsr	rpc_setup_replay
+	jset	#0,X:<input_host,_host
 	jsr	rpc_setup_dma
+	jmp	main
+_host	jsr	setup_io
 	jmp	main
 
 ;;
@@ -1637,6 +1681,7 @@ DMA_send	bset	#5,x:<<M_PCD	; start frame sync
 ;; the data is split into two separate bytes.
 ;;
 read_stream	;;; jmp	Host_get
+	jset	#0,X:<input_host,read_ring
 
 	; Check if there is a stored byte saved.
 	move	Y:DMA_r_has_byte,x0
@@ -1869,6 +1914,135 @@ rpc_average_dsp_load
 rpc_stream_available
 	move	X:<stream_available,x0
 	jsr	Host_send
+	rts
+
+;;
+;; Host port input: read one byte of the stream from the input ring
+;; into x0. Only register x0 is affected.
+;;
+read_ring	jset	#1,X:<stream_bytes,_byte1
+	jset	#0,X:<stream_bytes,_byte2
+
+	; Save used registers.
+	move	A2,X:<stream_save_a2
+	move	A1,X:<stream_save_a1
+	move	A0,X:<stream_save_a0
+	move	x1,X:<stream_save_x1
+	move	r6,X:<stream_save_r6
+	move	m6,X:<stream_save_m6
+
+	; Take the next word from the input ring.
+	move	#STREAM_SIZE-1,m6
+	move	X:<stream_read,r6
+	move	X:<stream_write,x0
+	move	r6,A
+	cmp	x0,A
+	jeq	_underrun
+_word	move	Y:(r6)+,x0
+	move	r6,X:<stream_read
+
+	; Return its first byte, keep the other two.
+	move	#>$ff,x1
+	move	x0,A
+	and	x1,A  #>$008000,x1
+	move	A1,X:<stream_byte2
+	mpy	x0,x1,A  #>$ff,x1
+	and	x1,A  #>$000080,x1
+	move	A1,X:<stream_byte1
+	mpy	x0,x1,A  #>$ff,x1
+	and	x1,A
+	move	A1,x0
+	bset	#1,X:<stream_bytes
+
+	; Restore registers.
+	move	X:<stream_save_a0,A0
+	move	X:<stream_save_a1,A1
+	move	X:<stream_save_a2,A2
+	move	X:<stream_save_x1,x1
+	move	X:<stream_save_m6,m6
+	move	X:<stream_save_r6,r6
+	rts
+
+_byte1	move	X:<stream_byte1,x0
+	bclr	#1,X:<stream_bytes
+	bset	#0,X:<stream_bytes
+	rts
+_byte2	move	X:<stream_byte2,x0
+	bclr	#0,X:<stream_bytes
+	rts
+
+_underrun	; The ring is empty: play silence until the 68030 sends
+	; more.
+	move	r0,X:<stream_save_r0
+	jsr	silence
+	move	X:<stream_save_r0,r0
+_empty	move	X:<stream_write,x0
+	move	r6,A
+	cmp	x0,A
+	jeq	_empty
+	jmp	_word
+
+;;
+;; Host receive interrupt: store the 68030's word in the input ring.
+;;
+host_receive
+	move	r6,X:<host_save_r6
+	move	m6,X:<host_save_m6
+	move	#STREAM_SIZE-1,m6
+	move	X:<stream_write,r6
+	nop
+	movep	X:<<M_HRX,Y:(r6)+
+	move	r6,X:<stream_write
+	move	X:<host_save_m6,m6
+	move	X:<host_save_r6,r6
+	rti
+
+;;
+;; Host command HC_FREE: send the number of words the 68030 may write
+;; into the input ring, two less than the free space (room for words
+;; still in the host port).
+;;
+host_free
+	move	A2,X:<host_save_a2
+	move	A1,X:<host_save_a1
+	move	A0,X:<host_save_a0
+	move	x0,X:<host_save_x0
+	move	X:<stream_write,A
+	move	X:<stream_read,x0
+	sub	x0,A  #>STREAM_SIZE-1,x0
+	and	x0,A			; words in the ring
+	move	A1,x0
+	move	#>STREAM_SIZE-3,A
+	sub	x0,A
+	jge	_answer
+	clr	A
+_answer	jclr	#1,X:<<M_HSR,_busy	; HTDE clear: last answer not read
+	movep	A1,X:<<M_HTX
+_busy	move	X:<host_save_x0,x0
+	move	X:<host_save_a0,A0
+	move	X:<host_save_a1,A1
+	move	X:<host_save_a2,A2
+	rti
+
+;;
+;; Setup the SSI (transmitter only: the samples go to the DAC) and the
+;; host port interrupts for the input.
+;;
+setup_io	movep	#%000000000,X:<<M_PCC	; SSI reset.
+	movep	#%111100000,X:<<M_PCC	; Port C control register.
+
+	move	#>stream_ring,x0
+	move	x0,X:<stream_read
+	move	x0,X:<stream_write
+	clr	A
+	move	A,X:<stream_bytes
+
+	movep	#0,X:<<M_TX		; TX must not be empty when TE gets set.
+	movep	#%000000101,X:<<M_HCR	; Host receive and command.
+	movep	#$3400,X:<<M_IPR	; SSI at IPL 2, host at IPL 0.
+	andi	#<$FC,MR
+	movep	#%0100000100000000,X:<<M_CRA
+	movep	#%0101100000001000,X:<<M_CRB
 	rts
 
 	end

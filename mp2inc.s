@@ -1,4 +1,9 @@
 RPC_AVAILABLE	equ	-10		; decoder rpc 9, sent as -(9+1)
+HC_FREE		equ	$80|($24/2)	; host command: free words in the ring
+FEED_MAX	equ	384		; 384 kbit/s, 44.1 kHz replayed at 49170 Hz
+ANSWER_POLLS	equ	256		; HC_FREE answer, in mp2_feed
+START_POLLS	equ	65535		; HC_FREE answer, the DSP initialising
+TXDE_POLLS	equ	64		; host port ready for the next word
 
 mp2_address	ds.l	1
 mp2_length	ds.l	1
@@ -9,21 +14,32 @@ mp2_start	bra.w	start_all
 mp2_stop	bra.w	stop_all
 mp2_add_available	bra.w	add_available
 mp2_stream_available	bra.w	stream_available
+mp2_feed	bra.w	feed
+mp2_feedmax	ds.l	1		; words per mp2_feed, 0 = FEED_MAX
+mp2_input	ds.l	1		; 0 = sound DMA, 1 = host port
 
 start_all
 	movem.l	d0-a6,-(sp)
 	bsr	saveaudio
 	bsr	mute
 	bsr	set_matrix
+	tst.l	mp2_input(pc)
+	beq.s	.dma
+	andi.w	#$ff7f,$ffff8932.w	; DSP receive off the matrix
+.dma
 	bsr	dsp_load_program
 	bsr	initialize_program
 	bsr	unmute
+	tst.l	mp2_input(pc)
+	bne.s	.out
 	bsr	play
-	movem.l	(sp)+,d0-a6
+.out	movem.l	(sp)+,d0-a6
 	rts
 	
 stop_all
 	movem.l	d0-a6,-(sp)
+	lea	playing(pc),a0
+	clr.w	(a0)
 	bsr	restoreaudio
 	bsr	dsp_reset
 	movem.l	(sp)+,d0-a6
@@ -33,6 +49,8 @@ stop_all
 ; Streaming: d0.l more bytes of the stream follow in the buffer.
 ;
 add_available
+	tst.l	mp2_input(pc)
+	bne.s	.host
 	move.l	d0,-(sp)
 	lsr.l	#1,d0			; in 16-bit words
 .wait	btst	#1,$ffffa202.w
@@ -40,12 +58,20 @@ add_available
 	move.l	d0,$ffffa204.w
 	move.l	(sp)+,d0
 	rts
+.host	move.l	a0,-(sp)
+	lea	unsent(pc),a0
+	add.l	d0,(a0)
+	movea.l	(sp)+,a0
+	rts
 
 ;
 ; Streaming: d0.l = bytes of the stream the decoder has not read yet,
-; negative while it waits for more.
+; negative while it waits for more; from the host port, the bytes of
+; the buffer that mp2_feed has not sent yet.
 ;
 stream_available
+	tst.l	mp2_input(pc)
+	bne.s	.host
 .send	btst	#1,$ffffa202.w
 	beq.s	.send
 	move.l	#RPC_AVAILABLE,$ffffa204.w
@@ -55,6 +81,91 @@ stream_available
 	lsl.l	#8,d0
 	asr.l	#7,d0			; signed 24-bit words to bytes
 	rts
+.host	move.l	unsent(pc),d0
+	rts
+
+;
+; Host port: call once per VBL. Keeps all registers and does not call
+; the OS, so it may run in the VBL interrupt.
+;
+feed	movem.l	d0-d7/a0-a4,-(sp)
+	tst.w	playing(pc)
+	beq.s	.out
+	move.l	mp2_feedmax(pc),d6
+	bne.s	.max
+	move.l	#FEED_MAX,d6
+.max	move.w	#ANSWER_POLLS,d5
+	bsr.s	send
+.out	movem.l	(sp)+,d0-d7/a0-a4
+	rts
+
+;
+; Ask the decoder how many words fit into its input ring and send that
+; many, d6.l at most and no more than reported, three bytes of the
+; buffer in each, from its start again at its end. d5.w = polls for the
+; answer. Uses d0-d4/d7/a0-a4.
+;
+send	movea.l	stream_ptr(pc),a0
+	movea.l	mp2_address(pc),a2
+	movea.l	a2,a3
+	adda.l	mp2_length(pc),a3	; end of the buffer
+	move.l	unsent(pc),d4
+	divu.l	#3,d4			; whole words reported
+	beq	.out
+
+	lea	$ffffa200.w,a1		; host port
+	moveq	#16-1,d1		; drop old answers
+.drain	btst	#0,2(a1)		; RXDF
+	beq.s	.cmd
+	tst.b	7(a1)
+	dbra	d1,.drain
+.cmd	btst	#7,1(a1)		; last host command still pending
+	bne.s	.out
+	move.b	#HC_FREE,1(a1)
+.answer	btst	#0,2(a1)		; RXDF
+	dbne	d5,.answer
+	beq.s	.out
+	move.l	4(a1),d0
+	and.l	#$00ffffff,d0
+	cmp.l	d6,d0
+	bls.s	.max
+	move.l	d6,d0
+.max	cmp.l	d4,d0
+	bls.s	.count
+	move.l	d4,d0
+.count	moveq	#0,d7			; bytes sent
+	subq.l	#1,d0
+	bmi.s	.out
+
+	lea	-3(a3),a4		; last whole word before the end
+.word	moveq	#TXDE_POLLS-1,d1
+.txde	btst	#1,2(a1)		; TXDE
+	dbne	d1,.txde
+	beq.s	.stop
+	cmpa.l	a4,a0
+	bhi.s	.tail
+	move.b	(a0)+,5(a1)
+	move.b	(a0)+,6(a1)
+	move.b	(a0)+,7(a1)
+.next	addq.l	#3,d7
+	dbra	d0,.word
+.stop	lea	stream_ptr(pc),a4
+	move.l	a0,(a4)
+	lea	unsent(pc),a4
+	sub.l	d7,(a4)
+.out	rts
+
+.tail	moveq	#0,d3			; a word across the end of the
+	moveq	#3-1,d2			; buffer: the missing bytes come
+.byte	lsl.l	#8,d3			; from its start
+	cmpa.l	a3,a0
+	blo.s	.get
+	movea.l	a2,a0
+.get	move.b	(a0)+,d3
+	dbra	d2,.byte
+	move.l	d3,4(a1)
+	bra.s	.next
+
 
 
 set_matrix
@@ -64,6 +175,9 @@ set_matrix
 	trap	#14
 	addq.l	#4,sp
 	
+	tst.l	mp2_input(pc)
+	bne	.host
+
 	;	setmode(STEREO16);
 	move.w	#1,-(sp)
 	move.w	#$84,-(sp)
@@ -94,9 +208,24 @@ set_matrix
 	move.w	#$83,-(sp)
 	trap	#14
 	lea	12(sp),sp	
+	bra.s	.freq
 
+.host	;	soundcmd(ADDERIN,MATIN);
+	move.w	#2,-(sp)
+	move.w	#4,-(sp)
+	move.w	#$82,-(sp)
+	trap	#14
+	addq.l	#6,sp
 
-	move.l	mp2_frequency(pc),d0
+	;	dsptristate(ENABLE,TRISTATE); the DSP receives nothing
+	;	from the matrix, its input comes through the host port.
+	move.w	#0,-(sp)
+	move.w	#1,-(sp)
+	move.w	#$89,-(sp)
+	trap	#14
+	addq.l	#6,sp
+
+.freq	move.l	mp2_frequency(pc),d0
 	move.l	mp2_external(pc),d1
 
 	cmp.l	#48000,d0
@@ -380,26 +509,51 @@ dsp_go
 	rts
 
 
+;
+; Tell the decoder where its input comes from and, for the sound DMA, how
+; many words the buffer holds. From the host port, fill its input ring
+; from the start of the stream; the first HC_FREE answer comes once the
+; decoder has set itself up.
+;
 initialize_program
 	lea	dsp_buf(pc),a0
+	move.l	mp2_input(pc),(a0)
+	moveq	#1,d1
+	tst.l	(a0)
+	bne.s	.send
 	move.l	mp2_length(pc),d0
 	subq.l	#8,d0			; NoCrew's mp2audio (stream.c) holds back 8 bytes too
 	lsr.l	#1,d0			; in 16-bit words
-	move.l	d0,(a0)
-
-	move.l	#0,-(sp)
+	move.l	d0,4(a0)
+	moveq	#2,d1
+.send	move.l	#0,-(sp)
 	pea	0.w
-	move.l	#1,-(sp)
+	move.l	d1,-(sp)
 	move.l	a0,-(sp)
 	move.w	#$62,-(sp)
 	trap	#14
 	lea	18(sp),sp
-	rts
+
+	tst.l	mp2_input(pc)
+	beq.s	.out
+	lea	stream_ptr(pc),a0
+	move.l	mp2_address(pc),(a0)
+	lea	unsent(pc),a0
+	move.l	mp2_length(pc),(a0)
+	move.l	#$ffffff,d6
+	move.w	#START_POLLS,d5
+	bsr	send
+	lea	playing(pc),a0
+	move.w	#1,(a0)
+.out	rts
 
 	
 	data
 audiosaved	dc.w	0
-dsp_buf	dc.l	0
+dsp_buf	dc.l	0,0
+playing	dc.w	0
+stream_ptr	dc.l	0		; next byte to send
+unsent	dc.l	0		; bytes reported, not sent yet
 
 dsp_bootstrap_code
 	dc.b	$0c,$00,$40,$00,$00,$00,$00,$00,$00,$00
