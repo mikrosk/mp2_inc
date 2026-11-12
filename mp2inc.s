@@ -1,6 +1,3 @@
-	opt	d-,p=68030/68882
-	output	.bin
-
 mp2_address	ds.l	1
 mp2_length	ds.l	1
 mp2_frequency	ds.l	1
@@ -289,9 +286,9 @@ dsp_load	bsr.s	dsp_reset
 dsp_reset	; Power down.
 	move.b	#$e,$ffff8800.w
 	move.b	$ffff8800.w,d0
-	and.b	#$ef,d0
+	andi.b	#$ef,d0
 	move.b	d0,$ffff8802.w
-	or.b	#$10,d0
+	ori.b	#$10,d0
 	move.b	d0,$ffff8802.w
 
 	; Wait for DSP to power down.
@@ -302,7 +299,7 @@ dsp_reset	; Power down.
 	; Power up.
 	move.b	#$e,$ffff8800.w
 	move.b	$ffff8800.w,d0
-	and.b	#$ef,d0
+	andi.b	#$ef,d0
 	move.b	d0,$ffff8802.w
 	rts
 

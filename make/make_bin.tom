@@ -1,7 +1,0 @@
-# Make 68030 player binary (mp2inc.bin, includes decoder.dsp).
-
-set PATH c:\tools
-
-gen.ttp mp2inc.s
-if $status != 0 then echo Assembling mp2inc.s failed!
-exit
