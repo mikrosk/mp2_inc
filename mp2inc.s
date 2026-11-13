@@ -1,3 +1,5 @@
+RPC_AVAILABLE	equ	-10		; decoder rpc 9, sent as -(9+1)
+
 mp2_address	ds.l	1
 mp2_length	ds.l	1
 mp2_frequency	ds.l	1
@@ -5,6 +7,8 @@ mp2_external	ds.l	1
 mp2_repeat	ds.l	1
 mp2_start	bra.w	start_all
 mp2_stop	bra.w	stop_all
+mp2_add_available	bra.w	add_available
+mp2_stream_available	bra.w	stream_available
 
 start_all
 	movem.l	d0-a6,-(sp)
@@ -23,6 +27,33 @@ stop_all
 	bsr	restoreaudio
 	bsr	dsp_reset
 	movem.l	(sp)+,d0-a6
+	rts
+
+;
+; Streaming: d0.l more bytes of the stream follow in the buffer.
+;
+add_available
+	move.l	d0,-(sp)
+	lsr.l	#1,d0			; in 16-bit words
+.wait	btst	#1,$ffffa202.w
+	beq.s	.wait
+	move.l	d0,$ffffa204.w
+	move.l	(sp)+,d0
+	rts
+
+;
+; Streaming: d0.l = bytes of the stream the decoder has not read yet,
+; negative while it waits for more.
+;
+stream_available
+.send	btst	#1,$ffffa202.w
+	beq.s	.send
+	move.l	#RPC_AVAILABLE,$ffffa204.w
+.receive	btst	#0,$ffffa202.w
+	beq.s	.receive
+	move.l	$ffffa204.w,d0
+	lsl.l	#8,d0
+	asr.l	#7,d0			; signed 24-bit words to bytes
 	rts
 
 
