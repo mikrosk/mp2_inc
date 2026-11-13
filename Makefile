@@ -10,7 +10,7 @@ VASM     = vasmm68k_mot
 all: mp2inc.bin
 
 mp2inc.bin: mp2inc.s decoder.dsp
-	$(VASM) -devpac -Ftos -m68030 -m68882 -nosym -quiet -o $@ $<
+	$(VASM) -Ftos -m68030 -m68882 -nosym -quiet -o $@ $<
 
 decoder.cld: decoder.asm equates.asm
 	$(ASM56000) -A -B$@ $<

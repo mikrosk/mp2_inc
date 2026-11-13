@@ -513,7 +513,9 @@ dsp_bootstrap_code
 
 dsp_mp2_player	incbin	decoder.dsp
 end_mp2_player
+	even
 
+; ds, not bss: the player is included with incbin and its file has no bss.
 dsp_program	ds.l	1
 dsp_length	ds.l	1
 dsp_value	ds.l	1
