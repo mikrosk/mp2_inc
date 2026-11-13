@@ -339,7 +339,9 @@ dsp_go
 
 initialize_program
 	lea	dsp_buf(pc),a0
-	move.l	mp2_length(pc),(a0)
+	move.l	mp2_length(pc),d0
+	lsr.l	#1,d0			; in 16-bit words
+	move.l	d0,(a0)
 
 	move.l	#0,-(sp)
 	pea	0.w
