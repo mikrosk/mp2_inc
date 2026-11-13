@@ -159,7 +159,8 @@ set_matrix_int_16390:
 	rts
 
 saveaudio
-	tst.w	audiosaved
+	lea	audiosaved(pc),a1
+	tst.w	(a1)
 	bne.s	.skip
 	lea	saveaudiobuf(pc),a0
 	move.w	$ffff8930.w,(a0)+
@@ -178,12 +179,13 @@ saveaudio
 	move.b	$ffff8901.w,(a0)+
 	move.b	$ffff8920.w,(a0)+
 	move.b	$ffff8921.w,(a0)+
-	move.w	#1,audiosaved
+	move.w	#1,(a1)
 .skip
 	rts
 
 restoreaudio
-	tst.w	audiosaved
+	lea	audiosaved(pc),a1
+	tst.w	(a1)
 	beq.s	.skip
 	lea	saveaudiobuf(pc),a0
 	move.w	(a0)+,$ffff8930.w
@@ -202,7 +204,7 @@ restoreaudio
 	move.b	(a0)+,$ffff8901.w
 	move.b	(a0)+,$ffff8920.w
 	move.b	(a0)+,$ffff8921.w
-	clr.w	audiosaved
+	clr.w	(a1)
 .skip
 	rts	
 	
