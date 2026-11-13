@@ -298,7 +298,7 @@ dsp_reset	; Power down.
 
 	; Wait for DSP to power down.
 	move.w	#10000-1,d0
-.wait	nop
+.wait	tst.b	$ffff8800.w		; PSG reads take the same time on any CPU
 	dbra	d0,.wait
 
 	; Power up.
