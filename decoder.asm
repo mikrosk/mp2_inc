@@ -676,6 +676,9 @@ getbits_mask		dc	$000000,$000001,$000003,$000007
 	org P:$10
 	movep	X:(r7)+,X:<<M_TX
 
+	org P:$12		;; Used instead of P:$10 after an underrun.
+	movep	X:(r7)+,X:<<M_TX
+
 ;;
 ;; Some macros.
 ;;
@@ -1833,13 +1836,14 @@ rpc_setup_replay_with_frequency_conversion
 ;; Setup DMA.
 ;;
 rpc_setup_dma	movep	#%000000000,x:<<M_PCC ; SSI reset.
-	movep	#%0100000100000000,x:<<M_CRA
-	movep	#%0111100000001000,x:<<M_CRB
 	movep	#%111100000,x:<<M_PCC ; Port C control register.
 	movep	#%000010000,x:<<M_PCDDR
 	movep	#%000000000,x:<<M_PCD ; Clear frame syncs.
+	movep	#0,x:<<M_TX	; TX must not be empty when TE gets set.
 	movep	#$3000,X:<<M_IPR
 	andi	#<$FC,MR
+	movep	#%0100000100000000,x:<<M_CRA
+	movep	#%0111100000001000,x:<<M_CRB
 	clr	A
 	move	A,X:<stream_available
 	rts
