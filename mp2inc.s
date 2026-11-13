@@ -21,6 +21,7 @@ start_all
 stop_all
 	movem.l	d0-a6,-(sp)
 	bsr	restoreaudio
+	bsr	dsp_reset
 	movem.l	(sp)+,d0-a6
 	rts
 
