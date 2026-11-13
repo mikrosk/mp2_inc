@@ -286,12 +286,15 @@ dsp_load	bsr.s	dsp_reset
 	rts
 
 dsp_reset	; Power down.
+	move.w	sr,d1
+	ori.w	#$0700,sr		; no other PSG access in between
 	move.b	#$e,$ffff8800.w
 	move.b	$ffff8800.w,d0
 	andi.b	#$ef,d0
 	move.b	d0,$ffff8802.w
 	ori.b	#$10,d0
 	move.b	d0,$ffff8802.w
+	move.w	d1,sr
 
 	; Wait for DSP to power down.
 	move.w	#10000-1,d0
@@ -299,10 +302,12 @@ dsp_reset	; Power down.
 	dbra	d0,.wait
 
 	; Power up.
+	ori.w	#$0700,sr
 	move.b	#$e,$ffff8800.w
 	move.b	$ffff8800.w,d0
 	andi.b	#$ef,d0
 	move.b	d0,$ffff8802.w
+	move.w	d1,sr
 	rts
 
 dsp_go
