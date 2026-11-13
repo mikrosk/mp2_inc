@@ -7,6 +7,7 @@ mp2_start	bra.w	start_all
 mp2_stop	bra.w	stop_all
 
 start_all
+	movem.l	d0-a6,-(sp)
 	bsr	saveaudio
 	bsr	mute
 	bsr	set_matrix
@@ -14,10 +15,13 @@ start_all
 	bsr	initialize_program
 	bsr	unmute
 	bsr	play
+	movem.l	(sp)+,d0-a6
 	rts
 	
 stop_all
+	movem.l	d0-a6,-(sp)
 	bsr	restoreaudio
+	movem.l	(sp)+,d0-a6
 	rts
 
 
