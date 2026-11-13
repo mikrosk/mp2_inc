@@ -383,6 +383,7 @@ dsp_go
 initialize_program
 	lea	dsp_buf(pc),a0
 	move.l	mp2_length(pc),d0
+	subq.l	#8,d0			; NoCrew's mp2audio (stream.c) holds back 8 bytes too
 	lsr.l	#1,d0			; in 16-bit words
 	move.l	d0,(a0)
 
